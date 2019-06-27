@@ -12,15 +12,15 @@
 #include <BH1750FVI.h>
 #include <VEML6075.h>
 #include <VL53L0X.h>
-#include "PCA9536.h"
-#include "TLC59108.h"
+#include <PCA9536.h>
+#include <TLC59108.h>
 
 // Точка доступа Wi-Fi
 char ssid[] = "MGBot";
 char pass[] = "Terminator812";
 
 // Параметры IoT сервера
-char auth[] = "180ab65a8b4c4c678cc9806744df443f";
+char auth[] = "7782f301820d406396ee6202ec0d5c41";
 IPAddress blynk_ip(139, 59, 206, 133);
 
 // Датчик освещенности
@@ -80,7 +80,7 @@ void setup()
 {
   // Инициализация последовательного порта
   Serial.begin(115200);
-  delay(512);
+  delay(500);
   Serial.println();
   Serial.println();
   Serial.println();
@@ -108,9 +108,9 @@ void setup()
   lcd.frameRect (0, 0, 127, 63, 1, 1);
   lcd.gotoxy (5, 5); lcd.string ("Waiting for WiFi...", false);
 
-  // Ожидание запуска Wi-Fi роутера (~ 2 минуты)
-  // delay(60000);
-  // delay(60000);
+  // Ожидание запуска Wi-Fi роутера (45...60 секунд)
+  // delay(30000);
+  // delay(30000);
 
   // Инициализация Wi-Fi и поключение к серверу Blynk
   lcd.clear (1, 1, 126, 63, 0x00);
@@ -173,9 +173,8 @@ void setup()
   // Инициализация RGB модуля
   leds.init(HW_RESET_PIN);
   leds.setLedOutputMode(TLC59108::LED_MODE::PWM_IND);
-  leds.setAllBrightness(0);
-  byte pwm = 0xFE;
-  leds.setBrightness(2, pwm);
+  byte pwm = 0x00; leds.setAllBrightness(pwm);
+  pwm = 0xFE; leds.setBrightness(2, pwm);
   delay(250);
 
   // Инициализация датчика BUZZER модуля
@@ -190,6 +189,10 @@ void loop()
 {
   // Blynk.run();
   // timer_main.run();
+  // timer_door.run();
+  // timer_reset.run();
+  // timer_alarm.run();
+  // timer_internet.run();
 }
 
 /*
