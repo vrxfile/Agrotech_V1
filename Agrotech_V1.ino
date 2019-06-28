@@ -4,25 +4,29 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <BlynkSimpleEsp32.h>
+#include <ESP32Ping.h>
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <Adafruit_MCP4725.h>
-#include <SparkFunLSM9DS1.h>
+#include <Adafruit_LSM9DS1.h>
 #include <I2C_graphical_LCD_display.h>
 #include <BH1750FVI.h>
-#include <VEML6075.h>
 #include <VL53L0X.h>
 #include <PCA9536.h>
 #include <TLC59108.h>
 
 // Точка доступа Wi-Fi
 char ssid[] = "MGBot";
+// char ssid[] = "AgroMGBOT";
 char pass[] = "Terminator812";
 
 // Параметры IoT сервера
 char auth[] = "7782f301820d406396ee6202ec0d5c41";
 IPAddress blynk_ip(139, 59, 206, 133);
+
+// Сервер для проверки работоспособности Интернета
+const char* remote_host = "www.google.com";
 
 // Датчик освещенности
 BH1750FVI bh1750;
@@ -30,19 +34,14 @@ BH1750FVI bh1750;
 // Датчик температуры/влажности и атмосферного давления
 Adafruit_BME280 bme;
 
-// Датчик УФ излучения
-VEML6075 veml;
-
 // Датчик расстояния
 VL53L0X lox;
 //#define LONG_RANGE
-//#define HIGH_SPEED
-#define HIGH_ACCURACY
+#define HIGH_SPEED
+// #define HIGH_ACCURACY
 
 // Датчик положения
-LSM9DS1 imu;
-#define LSM9DS1_M   0x1E
-#define LSM9DS1_AG  0x6B
+Adafruit_LSM9DS1 imu = Adafruit_LSM9DS1();
 
 // Модуль динамика
 Adafruit_MCP4725 buzzer;
@@ -59,10 +58,17 @@ PCA9536 pca9536;
 I2C_graphical_LCD_display lcd;
 
 // Датчик влажности почвы емкостной
-const float air_value    = 857.0;
-const float water_value  = 573.0;
-const float moisture_0   = 0.0;
+#define SOIL_MOISTURE1      A4
+#define SOIL_TEMPERATURE1   A5
+#define SOIL_MOISTURE2      A6
+#define SOIL_TEMPERATURE2   A7
+const float air_value = 551.0;
+const float water_value = 293.0;
+const float moisture_0 = 0.0;
 const float moisture_100 = 100.0;
+
+// Расстояние, при котором дверца закрыта
+const float door_dist = 300.0;
 
 #define ALARM_TIMER    100   // Период для таймера сигнализации удара
 #define DOOR_TIMER     1000  // Период для таймера открытия дверцы
@@ -79,13 +85,13 @@ BlynkTimer timer_internet;
 
 #define RLED 3
 #define GLED 2
-#define BLED 4
+#define BLED 5
 
 void setup()
 {
   // Инициализация последовательного порта
   Serial.begin(115200);
-  delay(1000);
+  delay(500);
   Serial.println();
   Serial.println();
   Serial.println();
@@ -93,8 +99,8 @@ void setup()
   // Вывод в терминал сообщения о причине сброса контроллера
   Serial.println("CPU0 reset reason:");
   print_reset_reason(rtc_get_reset_reason(0));
-  Serial.println();
   verbose_print_reset_reason(rtc_get_reset_reason(0));
+  Serial.println();
   Serial.println("CPU1 reset reason:");
   print_reset_reason(rtc_get_reset_reason(1));
   verbose_print_reset_reason(rtc_get_reset_reason(1));
@@ -110,20 +116,16 @@ void setup()
   pca9536.setMode(IO_OUTPUT);
   delay(250);
 
-  // Тестирование сирены
-  pca9536.setState(IO1, IO_HIGH); delay(250);
-  pca9536.setState(IO1, IO_LOW); delay(250);
-
   // Включение реле управления Wi-Fi роутером
   pca9536.setState(IO0, IO_HIGH); delay(250);
 
   // Инициализация RGB модуля
   leds.init(HW_RESET_PIN);
   leds.setLedOutputMode(TLC59108::LED_MODE::PWM_IND);
-  byte pwm = 0x00; leds.setAllBrightness(pwm);
 
   // Включение красного светодиода
-  pwm = 0xFE; leds.setBrightness(RLED, pwm);
+  byte pwm = 0x00; leds.setAllBrightness(pwm);
+  pwm = 0x1F; leds.setBrightness(RLED, pwm);
   delay(250);
 
   // Инициализация LCD дисплея
@@ -142,7 +144,7 @@ void setup()
   Serial.print("Connecting to ");
   Serial.println(ssid);
   Blynk.begin(auth, ssid, pass, blynk_ip, 8442);
-  delay(1024);
+  delay(1000);
   Serial.println("");
   Serial.println("WiFi connected");
   Serial.print("IP address: ");
@@ -150,9 +152,25 @@ void setup()
   Serial.println();
 
   // Поверка подключения к Интернету
+  lcd.clear (0, 0, 127, 63, 0x00);
+  lcd.gotoxy (5, 10);
+  lcd.string ("Connected", false);
+  lcd.gotoxy (5, 35);
+  bool ping_google = Ping.ping(remote_host);
+  if (Ping.ping(remote_host))
+  {
+    Serial.println("Internet is working");
+    lcd.string ("Internet is working", false);
+  }
+  else
+  {
+    Serial.println("Internet connection failed!");
+    lcd.string ("Connection failed!", false);
+  }
 
   // Включение синего светодиода
-  pwm = 0xFE; leds.setBrightness(BLED, pwm);
+  pwm = 0x00; leds.setAllBrightness(pwm);
+  pwm = 0x1F; leds.setBrightness(BLED, pwm);
   delay(250);
 
   // Инициализация датчика BH1750
@@ -166,18 +184,17 @@ void setup()
     Serial.println("Could not find a valid BME280 sensor, check wiring!");
   delay(250);
 
-  // Инициализация датчика VEML6075
-  if (!veml.begin())
-    Serial.println("VEML6075 not found!");
-  delay(250);
-
   // Инициализация датчика LSM9DS1
-  imu.settings.device.commInterface = IMU_MODE_I2C;
-  imu.settings.device.mAddress = LSM9DS1_M;
-  imu.settings.device.agAddress = LSM9DS1_AG;
-  bool imu_status = imu.begin();
-  if (!imu_status)
-    Serial.println("Failed to communicate with LSM9DS1!");
+  if (!imu.begin())
+  {
+    Serial.println("Unable to initialize the LSM9DS1. Check your wiring!");
+  }
+  else
+  {
+    imu.setupAccel(imu.LSM9DS1_ACCELRANGE_2G);
+    imu.setupMag(imu.LSM9DS1_MAGGAIN_4GAUSS);
+    imu.setupGyro(imu.LSM9DS1_GYROSCALE_245DPS);
+  }
 
   // Инициализация датчика VL53L0x
   lox.init();
@@ -201,13 +218,24 @@ void setup()
   buzzer.begin(0x61); // С перемычкой адрес будет 0x60
   delay(250);
 
+  // Тестирование сирены
+  pca9536.setState(IO1, IO_HIGH); delay(150);
+  pca9536.setState(IO1, IO_LOW); delay(150);
+
   // Включение зеленого светодиода
-  pwm = 0xFE; leds.setBrightness(RLED, pwm);
+  pwm = 0x00;
+  leds.setAllBrightness(pwm);
+  pwm = 0x1F;
+  if (ping_google)
+    leds.setBrightness(GLED, pwm);
+  else
+    leds.setBrightness(RLED, pwm);
   delay(250);
 
   // Инициализация таймеров
   timer_main.setInterval(MAIN_TIMER, readSendData);
   timer_door.setInterval(DOOR_TIMER, readDistSensor);
+  timer_alarm.setInterval(ALARM_TIMER, readIMUSensor);
 }
 
 void loop()
@@ -216,15 +244,26 @@ void loop()
   timer_main.run();
   timer_door.run();
   // timer_reset.run();
-  // timer_alarm.run();
+  timer_alarm.run();
   // timer_internet.run();
 }
 
 void readDistSensor()
 {
   float dist = lox.readRangeSingleMillimeters();
-  Serial.print("Distance = ");
-  Serial.println(dist);
+  //  Serial.print("Distance = ");
+  //  Serial.println(dist);
+  //  Serial.println();
+}
+
+void readIMUSensor()
+{
+  sensors_event_t a, m, g, t;
+  imu.getEvent(&a, &m, &g, &t);
+  //  Serial.print("Accel X: "); Serial.print(a.acceleration.x); Serial.print(" m/s^2");
+  //  Serial.print("\tY: "); Serial.print(a.acceleration.y); Serial.print(" m/s^2 ");
+  //  Serial.print("\tZ: "); Serial.print(a.acceleration.z); Serial.println(" m/s^2 ");
+  //  Serial.println();
 }
 
 // Считывание датчиков и отправка данных на сервер Blynk
@@ -250,17 +289,29 @@ void readSendData()
   Serial.println(light);
   Blynk.virtualWrite(V7, light); delay(25);             // Отправка данных на сервер Blynk
 
-  // Датчиков почвы
-  //  float adc1_1 = (float)ads1015.readADC_SingleEnded(0);
-  //  float adc1_2 = (float)ads1015.readADC_SingleEnded(1);
-  //  float soil_hum = map(adc1_1, air_value, water_value, moisture_0, moisture_100);
-  //  float soil_temp = adc1_2 / 10.0;
-  //  Serial.print("Soil temperature = ");
-  //  Serial.println(soil_temp);
-  //  Serial.print("Soil moisture = ");
-  //  Serial.println(soil_hum);
-  //  Blynk.virtualWrite(V2, soil_temp); delay(25);        // Отправка данных на сервер Blynk
-  //  Blynk.virtualWrite(V3, soil_hum); delay(25);         // Отправка данных на сервер Blynk
+  // Считывание датчиков почвы
+  float adc1_1 = (float)analogRead(SOIL_MOISTURE1);
+  float adc1_2 = (float)analogRead(SOIL_TEMPERATURE1);
+  float adc2_1 = (float)analogRead(SOIL_MOISTURE2);
+  float adc2_2 = (float)analogRead(SOIL_TEMPERATURE2);
+  float soil_hum1 = map(adc1_1, air_value, water_value, moisture_0, moisture_100);
+  float soil_temp1 = adc1_2 / 10.0;
+  float soil_hum2 = map(adc2_1, air_value, water_value, moisture_0, moisture_100);
+  float soil_temp2 = adc2_2 / 10.0;
+  //  Serial.print("Soil temperature 1 = ");
+  //  Serial.println(soil_temp1);
+  //  Serial.print("Soil moisture 1 = ");
+  //  Serial.println(soil_hum1);
+  //  Serial.print("Soil temperature 2 = ");
+  //  Serial.println(soil_temp2);
+  //  Serial.print("Soil moisture 2 = ");
+  //  Serial.println(soil_hum2);
+  Serial.println(adc1_1);
+  Serial.println(adc2_1);
+  Blynk.virtualWrite(V0, soil_hum1); delay(25);         // Отправка данных на сервер Blynk
+  Blynk.virtualWrite(V1, soil_hum2); delay(25);         // Отправка данных на сервер Blynk
+  Blynk.virtualWrite(V2, soil_temp1); delay(25);        // Отправка данных на сервер Blynk
+  Blynk.virtualWrite(V3, soil_temp2); delay(25);        // Отправка данных на сервер Blynk
 
   Serial.println();
 }
