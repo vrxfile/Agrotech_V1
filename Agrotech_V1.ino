@@ -1,5 +1,6 @@
 #define BLYNK_PRINT Serial
 
+#include <rom/rtc.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <BlynkSimpleEsp32.h>
@@ -76,13 +77,27 @@ BlynkTimer timer_reset;
 BlynkTimer timer_alarm;
 BlynkTimer timer_internet;
 
+#define RLED 3
+#define GLED 2
+#define BLED 4
+
 void setup()
 {
   // Инициализация последовательного порта
   Serial.begin(115200);
-  delay(500);
+  delay(1000);
   Serial.println();
   Serial.println();
+  Serial.println();
+
+  // Вывод в терминал сообщения о причине сброса контроллера
+  Serial.println("CPU0 reset reason:");
+  print_reset_reason(rtc_get_reset_reason(0));
+  Serial.println();
+  verbose_print_reset_reason(rtc_get_reset_reason(0));
+  Serial.println("CPU1 reset reason:");
+  print_reset_reason(rtc_get_reset_reason(1));
+  verbose_print_reset_reason(rtc_get_reset_reason(1));
   Serial.println();
 
   // Инициализация I2C
@@ -102,10 +117,18 @@ void setup()
   // Включение реле управления Wi-Fi роутером
   pca9536.setState(IO0, IO_HIGH); delay(250);
 
+  // Инициализация RGB модуля
+  leds.init(HW_RESET_PIN);
+  leds.setLedOutputMode(TLC59108::LED_MODE::PWM_IND);
+  byte pwm = 0x00; leds.setAllBrightness(pwm);
+
+  // Включение красного светодиода
+  pwm = 0xFE; leds.setBrightness(RLED, pwm);
+  delay(250);
+
   // Инициализация LCD дисплея
   lcd.begin();
   lcd.clear (0, 0, 127, 63, 0x00);
-  lcd.frameRect (0, 0, 127, 63, 1, 1);
   lcd.gotoxy (5, 5); lcd.string ("Waiting for WiFi...", false);
 
   // Ожидание запуска Wi-Fi роутера (45...60 секунд)
@@ -113,20 +136,24 @@ void setup()
   // delay(30000);
 
   // Инициализация Wi-Fi и поключение к серверу Blynk
-  lcd.clear (1, 1, 126, 63, 0x00);
-  lcd.gotoxy (5, 5); lcd.string ("Connecting WiFi...", false);
-  lcd.gotoxy (5, 25); lcd.string ("Starting Blynk...", false);
-  //  Serial.print("Connecting to ");
-  //  Serial.println(ssid);
-  //  Blynk.begin(auth, ssid, pass, blynk_ip, 8442);
-  //  delay(1024);
-  //  Serial.println("");
-  //  Serial.println("WiFi connected");
-  //  Serial.print("IP address: ");
-  //  Serial.println(WiFi.localIP());
-  //  Serial.println();
+  lcd.clear (0, 0, 127, 63, 0x00);
+  lcd.gotoxy (5, 10); lcd.string ("Connecting WiFi...", false);
+  lcd.gotoxy (5, 35); lcd.string ("Starting Blynk...", false);
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  Blynk.begin(auth, ssid, pass, blynk_ip, 8442);
+  delay(1024);
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
 
   // Поверка подключения к Интернету
+
+  // Включение синего светодиода
+  pwm = 0xFE; leds.setBrightness(BLED, pwm);
+  delay(250);
 
   // Инициализация датчика BH1750
   bh1750.begin();
@@ -170,68 +197,74 @@ void setup()
   lox.setMeasurementTimingBudget(200000);
 #endif
 
-  // Инициализация RGB модуля
-  leds.init(HW_RESET_PIN);
-  leds.setLedOutputMode(TLC59108::LED_MODE::PWM_IND);
-  byte pwm = 0x00; leds.setAllBrightness(pwm);
-  pwm = 0xFE; leds.setBrightness(2, pwm);
-  delay(250);
-
   // Инициализация датчика BUZZER модуля
   buzzer.begin(0x61); // С перемычкой адрес будет 0x60
   delay(250);
 
+  // Включение зеленого светодиода
+  pwm = 0xFE; leds.setBrightness(RLED, pwm);
+  delay(250);
+
   // Инициализация таймеров
-  // timer_main.setInterval(MAIN_TIMER, readSendData);
+  timer_main.setInterval(MAIN_TIMER, readSendData);
+  timer_door.setInterval(DOOR_TIMER, readDistSensor);
 }
 
 void loop()
 {
-  // Blynk.run();
-  // timer_main.run();
-  // timer_door.run();
+  Blynk.run();
+  timer_main.run();
+  timer_door.run();
   // timer_reset.run();
   // timer_alarm.run();
   // timer_internet.run();
 }
 
-/*
-  // Считывание датчиков и отправка данных на сервер Blynk
-  void readSendData()
-  {
-  // Считывание датчика света
-  float light = bh1750.getAmbientLight();
-  Serial.print("Light = ");
-  Serial.println(light);
-  Blynk.virtualWrite(V5, light); delay(25);             // Отправка данных на сервер Blynk
+void readDistSensor()
+{
+  float dist = lox.readRangeSingleMillimeters();
+  Serial.print("Distance = ");
+  Serial.println(dist);
+}
 
+// Считывание датчиков и отправка данных на сервер Blynk
+void readSendData()
+{
   // Считывание датчика температуры/влажности/давления
-  float air_temp = bme280.readTemperature();
-  float air_hum = bme280.readHumidity();
-  float air_press = bme280.readPressure() / 100.0F;
+  float air_temp = bme.readTemperature();
+  float air_hum = bme.readHumidity();
+  float air_press = bme.readPressure() * 7.5006 / 1000.0;
   Serial.print("Air temperature = ");
   Serial.println(air_temp);
   Serial.print("Air humidity = ");
   Serial.println(air_hum);
   Serial.print("Air pressure = ");
   Serial.println(air_press);
-  Blynk.virtualWrite(V0, air_temp); delay(25);        // Отправка данных на сервер Blynk
-  Blynk.virtualWrite(V1, air_hum); delay(25);         // Отправка данных на сервер Blynk
-  Blynk.virtualWrite(V4, air_press); delay(25);       // Отправка данных на сервер Blynk
+  Blynk.virtualWrite(V4, air_temp); delay(25);        // Отправка данных на сервер Blynk
+  Blynk.virtualWrite(V5, air_hum); delay(25);         // Отправка данных на сервер Blynk
+  Blynk.virtualWrite(V6, air_press); delay(25);       // Отправка данных на сервер Blynk
+
+  // Считывание датчика света
+  float light = bh1750.getAmbientLight();
+  Serial.print("Light = ");
+  Serial.println(light);
+  Blynk.virtualWrite(V7, light); delay(25);             // Отправка данных на сервер Blynk
 
   // Датчиков почвы
-  float adc1_1 = (float)ads1015.readADC_SingleEnded(0);
-  float adc1_2 = (float)ads1015.readADC_SingleEnded(1);
-  float soil_hum = map(adc1_1, air_value, water_value, moisture_0, moisture_100);
-  float soil_temp = adc1_2 / 10.0;
-  Serial.print("Soil temperature = ");
-  Serial.println(soil_temp);
-  Serial.print("Soil moisture = ");
-  Serial.println(soil_hum);
-  Blynk.virtualWrite(V2, soil_temp); delay(25);        // Отправка данных на сервер Blynk
-  Blynk.virtualWrite(V3, soil_hum); delay(25);         // Отправка данных на сервер Blynk
-  }
+  //  float adc1_1 = (float)ads1015.readADC_SingleEnded(0);
+  //  float adc1_2 = (float)ads1015.readADC_SingleEnded(1);
+  //  float soil_hum = map(adc1_1, air_value, water_value, moisture_0, moisture_100);
+  //  float soil_temp = adc1_2 / 10.0;
+  //  Serial.print("Soil temperature = ");
+  //  Serial.println(soil_temp);
+  //  Serial.print("Soil moisture = ");
+  //  Serial.println(soil_hum);
+  //  Blynk.virtualWrite(V2, soil_temp); delay(25);        // Отправка данных на сервер Blynk
+  //  Blynk.virtualWrite(V3, soil_hum); delay(25);         // Отправка данных на сервер Blynk
 
+  Serial.println();
+}
+/*
   // Управление реле #1 с Blynk
   BLYNK_WRITE(V100)
   {
@@ -254,3 +287,51 @@ void loop()
   digitalWrite(RELAY_PIN_2, relay_ctl);
   }
 */
+
+// Вывод сообщения о причине сброса контроллера
+void print_reset_reason(RESET_REASON reason)
+{
+  switch ( reason)
+  {
+    case 1 : Serial.println ("POWERON_RESET"); break;         /**<1,  Vbat power on reset*/
+    case 3 : Serial.println ("SW_RESET"); break;              /**<3,  Software reset digital core*/
+    case 4 : Serial.println ("OWDT_RESET"); break;            /**<4,  Legacy watch dog reset digital core*/
+    case 5 : Serial.println ("DEEPSLEEP_RESET"); break;       /**<5,  Deep Sleep reset digital core*/
+    case 6 : Serial.println ("SDIO_RESET"); break;            /**<6,  Reset by SLC module, reset digital core*/
+    case 7 : Serial.println ("TG0WDT_SYS_RESET"); break;      /**<7,  Timer Group0 Watch dog reset digital core*/
+    case 8 : Serial.println ("TG1WDT_SYS_RESET"); break;      /**<8,  Timer Group1 Watch dog reset digital core*/
+    case 9 : Serial.println ("RTCWDT_SYS_RESET"); break;      /**<9,  RTC Watch dog Reset digital core*/
+    case 10 : Serial.println ("INTRUSION_RESET"); break;      /**<10, Instrusion tested to reset CPU*/
+    case 11 : Serial.println ("TGWDT_CPU_RESET"); break;      /**<11, Time Group reset CPU*/
+    case 12 : Serial.println ("SW_CPU_RESET"); break;         /**<12, Software reset CPU*/
+    case 13 : Serial.println ("RTCWDT_CPU_RESET"); break;     /**<13, RTC Watch dog Reset CPU*/
+    case 14 : Serial.println ("EXT_CPU_RESET"); break;        /**<14, for APP CPU, reseted by PRO CPU*/
+    case 15 : Serial.println ("RTCWDT_BROWN_OUT_RESET"); break; /**<15, Reset when the vdd voltage is not stable*/
+    case 16 : Serial.println ("RTCWDT_RTC_RESET"); break;     /**<16, RTC Watch dog reset digital core and rtc module*/
+    default : Serial.println ("NO_MEAN");
+  }
+}
+
+// Расшифровка сообщения о причине сброса контроллера
+void verbose_print_reset_reason(RESET_REASON reason)
+{
+  switch ( reason)
+  {
+    case 1  : Serial.println ("Vbat power on reset"); break;
+    case 3  : Serial.println ("Software reset digital core"); break;
+    case 4  : Serial.println ("Legacy watch dog reset digital core"); break;
+    case 5  : Serial.println ("Deep Sleep reset digital core"); break;
+    case 6  : Serial.println ("Reset by SLC module, reset digital core"); break;
+    case 7  : Serial.println ("Timer Group0 Watch dog reset digital core"); break;
+    case 8  : Serial.println ("Timer Group1 Watch dog reset digital core"); break;
+    case 9  : Serial.println ("RTC Watch dog Reset digital core"); break;
+    case 10 : Serial.println ("Instrusion tested to reset CPU"); break;
+    case 11 : Serial.println ("Time Group reset CPU"); break;
+    case 12 : Serial.println ("Software reset CPU"); break;
+    case 13 : Serial.println ("RTC Watch dog Reset CPU"); break;
+    case 14 : Serial.println ("for APP CPU, reseted by PRO CPU"); break;
+    case 15 : Serial.println ("Reset when the vdd voltage is not stable"); break;
+    case 16 : Serial.println ("RTC Watch dog reset digital core and rtc module"); break;
+    default : Serial.println ("NO_MEAN");
+  }
+}
