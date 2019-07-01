@@ -69,12 +69,10 @@ const float water_value = 830.0;
 const float moisture_0 = 0.0;
 const float moisture_100 = 100.0;
 
-// Расстояние, при котором дверца закрыта
-const float door_dist = 10.0;
-
 // Периоды таймеров
 #define ALARM_TIMER    100   // Период для таймера сигнализации удара
 #define DOOR_TIMER     1000  // Период для таймера открытия дверцы
+#define AUTO_TIMER     1000  // Период для таймера автоматических функций
 #define MAIN_TIMER     10000 // Период для таймера обновления данных
 #define INTERNET_TIMER 60000 // Период для таймера тестирования Интернета
 #define RESET_TIMER    60000 // Период для таймера общей перезагрузки
@@ -87,6 +85,7 @@ const float door_dist = 10.0;
 // Таймеры
 BlynkTimer timer_main;
 BlynkTimer timer_door;
+BlynkTimer timer_auto;
 BlynkTimer timer_reset;
 BlynkTimer timer_alarm;
 BlynkTimer timer_internet;
@@ -108,8 +107,24 @@ static volatile float acc_zz = 0.0;
 static volatile float acc_x0 = 0.0;
 static volatile float acc_y0 = 0.0;
 static volatile float acc_z0 = 0.0;
+
+// Статусы и флаги различных систем
+static volatile int acc_status = 0x00;
+static volatile int door_status = 0x00;
 static volatile int wifi_status = 0x00;
 static volatile int blynk_status = 0x00;
+static volatile int i2c_status = 0x00;
+
+// Счетчики событий различных систем
+static volatile int acc_counter = 0x00;
+static volatile int relay1_counter = 0x00;
+static volatile int relay2_counter = 0x00;
+
+// Различные константы
+const float acc_dd = 2.0;       // Пороги срабатывания по акселеромеру
+const float door_dist = 5.0;    // Расстояние, при котором дверца закрыта
+const int acc_max_counter = 15; // Количество ударов до срабатывания сигнализации
+
 
 void setup()
 {
@@ -132,7 +147,7 @@ void setup()
 
   // Инициализация I2C
   Wire.begin();
-  Wire.setClock(100000L);
+  Wire.setClock(10000L);
 
   // Инициализация модуля 4-х реле
   pca9536.reset();
@@ -218,7 +233,7 @@ void setup()
   }
   else
   {
-    imu.setupAccel(imu.LSM9DS1_ACCELRANGE_2G);
+    imu.setupAccel(imu.LSM9DS1_ACCELRANGE_8G);
     imu.setupMag(imu.LSM9DS1_MAGGAIN_4GAUSS);
     imu.setupGyro(imu.LSM9DS1_GYROSCALE_245DPS);
     sensors_event_t a, m, g, t;
@@ -274,6 +289,7 @@ void setup()
   // Инициализация таймеров
   timer_main.setInterval(MAIN_TIMER, readSendData);
   timer_door.setInterval(DOOR_TIMER, readDoorSensor);
+  timer_auto.setInterval(AUTO_TIMER, doAutoFunctions);
   timer_alarm.setInterval(ALARM_TIMER, readIMUSensor);
 }
 
@@ -301,6 +317,12 @@ void readDoorSensor()
     Serial.print("Door proximity = ");
     Serial.println(prox);
     Serial.println();
+    if (prox < door_dist)
+    {
+      door_status = 0x01;
+      Serial.println("Proximity sensor event");
+      Serial.println();
+    }
   }
 }
 
@@ -308,13 +330,25 @@ void readIMUSensor()
 {
   sensors_event_t a, m, g, t;
   imu.getEvent(&a, &m, &g, &t);
-  acc_xx = a.acceleration.x;
-  acc_yy = a.acceleration.y;
-  acc_zz = a.acceleration.z;
-  //  Serial.print("Accel X: "); Serial.print(a.acceleration.x); Serial.print(" m/s^2");
-  //  Serial.print("\tY: "); Serial.print(a.acceleration.y); Serial.print(" m/s^2 ");
-  //  Serial.print("\tZ: "); Serial.print(a.acceleration.z); Serial.println(" m/s^2 ");
+  acc_xx = fabs(a.acceleration.x - acc_x0);
+  acc_yy = fabs(a.acceleration.y - acc_y0);
+  acc_zz = fabs(a.acceleration.z - acc_z0);
+  //  Serial.print("Accel X: "); Serial.print(acc_xx); Serial.print(" m/s^2");
+  //  Serial.print("\tY: "); Serial.print(acc_yy); Serial.print(" m/s^2 ");
+  //  Serial.print("\tZ: "); Serial.print(acc_zz); Serial.println(" m/s^2 ");
   //  Serial.println();
+  if ((acc_xx > acc_dd) || (acc_yy > acc_dd) || (acc_zz > acc_dd))
+  {
+    acc_counter++;
+    Serial.print("Acceleromter event: ");
+    Serial.println(acc_counter);
+    Serial.println();
+    if (acc_counter > acc_max_counter)
+    {
+      acc_counter = 0;
+      acc_status = 0x01;
+    }
+  }
 }
 
 // Считывание датчиков и отправка данных на сервер Blynk
@@ -450,23 +484,7 @@ void verbose_print_reset_reason(RESET_REASON reason)
   }
 }
 
-// Проверка работоспособности Интернета
-int ping_internet()
+// Автоматические функции и различные проверки
+void doAutoFunctions()
 {
-  const char* host = "www.yandex.ru";
-  unsigned int port = 80;
-  if (client.connect(host, port))
-  {
-    if (client.connected())
-    {
-      client.stop();
-      return 0x01;
-    }
-    else
-    {
-      client.stop();
-      return 0x00;
-    }
-  }
-  return 0x02;
 }
