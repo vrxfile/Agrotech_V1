@@ -7,7 +7,6 @@
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
-#include <Adafruit_MCP4725.h>
 #include <Adafruit_LSM9DS1.h>
 #include <Adafruit_APDS9960.h>
 #include <I2C_graphical_LCD_display.h>
@@ -15,8 +14,6 @@
 #include <VL53L0X.h>
 #include <PCA9536.h>
 #include <TLC59108.h>
-
-WiFiClient client;
 
 // Точка доступа Wi-Fi
 char ssid[] = "MGBot";
@@ -41,9 +38,6 @@ VL53L0X lox;
 
 // Датчик положения
 Adafruit_LSM9DS1 imu = Adafruit_LSM9DS1();
-
-// Модуль динамика
-Adafruit_MCP4725 buzzer;
 
 // Датчик приближения
 Adafruit_APDS9960 apds9960;
@@ -76,6 +70,7 @@ const float moisture_100 = 100.0;
 #define MAIN_TIMER     10000 // Период для таймера обновления данных
 #define INTERNET_TIMER 60000 // Период для таймера тестирования Интернета
 #define RESET_TIMER    60000 // Период для таймера общей перезагрузки
+#define RELAY_TIMER    60000 // Период для таймеров управления реле
 
 // Номера светодиодов RGB модуля
 #define RLED 3
@@ -88,6 +83,7 @@ BlynkTimer timer_door;
 BlynkTimer timer_auto;
 BlynkTimer timer_reset;
 BlynkTimer timer_alarm;
+BlynkTimer timer_relay;
 BlynkTimer timer_internet;
 
 // Данные с датчиков
@@ -111,6 +107,8 @@ static volatile float acc_z0 = 0.0;
 // Статусы и флаги различных систем
 static volatile int acc_status = 0x00;
 static volatile int door_status = 0x00;
+static volatile int relay1_status = 0x00;
+static volatile int relay2_status = 0x00;
 static volatile int wifi_status = 0x00;
 static volatile int blynk_status = 0x00;
 static volatile int i2c_status = 0x00;
@@ -119,12 +117,13 @@ static volatile int i2c_status = 0x00;
 static volatile int acc_counter = 0x00;
 static volatile int relay1_counter = 0x00;
 static volatile int relay2_counter = 0x00;
+static volatile int reset_counter = 0x00;
 
 // Различные константы
-const float acc_dd = 2.0;       // Пороги срабатывания по акселеромеру
-const float door_dist = 5.0;    // Расстояние, при котором дверца закрыта
-const int acc_max_counter = 15; // Количество ударов до срабатывания сигнализации
-
+const float acc_dd = 2.0;             // Пороги срабатывания по акселеромеру
+const float door_dist = 5.0;          // Расстояние, при котором дверца закрыта
+const int acc_max_counter = 15;       // Количество ударов до срабатывания сигнализации
+const int max_reset_counter = 1440;   // Количество минут до перезагрузки всей системы
 
 void setup()
 {
@@ -154,9 +153,6 @@ void setup()
   pca9536.setState(IO_LOW);
   pca9536.setMode(IO_OUTPUT);
   delay(250);
-
-  // Включение реле управления Wi-Fi роутером
-  pca9536.setState(IO0, IO_HIGH); delay(250);
 
   // Инициализация RGB модуля
   leds.init(HW_RESET_PIN);
@@ -268,14 +264,6 @@ void setup()
   apds9960.enableColor(true);
   apds9960.enableProximity(true);
 
-  // Инициализация датчика BUZZER модуля
-  buzzer.begin(0x61); // С перемычкой адрес будет 0x60
-  delay(250);
-
-  // Тестирование сирены
-  pca9536.setState(IO1, IO_HIGH); delay(150);
-  pca9536.setState(IO1, IO_LOW); delay(150);
-
   // Включение зеленого светодиода
   pwm = 0x00;
   leds.setAllBrightness(pwm);
@@ -291,6 +279,8 @@ void setup()
   timer_door.setInterval(DOOR_TIMER, readDoorSensor);
   timer_auto.setInterval(AUTO_TIMER, doAutoFunctions);
   timer_alarm.setInterval(ALARM_TIMER, readIMUSensor);
+  timer_relay.setInterval(RELAY_TIMER, doRelayFunctions);
+  timer_reset.setInterval(RESET_TIMER, resetProcedure);
 }
 
 void loop()
@@ -298,11 +288,14 @@ void loop()
   Blynk.run();
   timer_main.run();
   timer_door.run();
-  // timer_reset.run();
+  timer_auto.run();
+  timer_reset.run();
   timer_alarm.run();
+  timer_relay.run();
   // timer_internet.run();
 }
 
+// Датчик открытия дверцы
 void readDoorSensor()
 {
   uint16_t red_data   = 0;
@@ -326,6 +319,7 @@ void readDoorSensor()
   }
 }
 
+// Акселерометр
 void readIMUSensor()
 {
   sensors_event_t a, m, g, t;
@@ -412,29 +406,47 @@ void readSendData()
 
   Serial.println();
 }
-/*
-  // Управление реле #1 с Blynk
-  BLYNK_WRITE(V100)
-  {
+// Управление реле #1
+BLYNK_WRITE(V100)
+{
   // Получение управляющего сигнала с сервера
-  int relay_ctl = param.asInt();
+  relay1_status = param.asInt();
   Serial.print("Relay power 1: ");
-  Serial.println(relay_ctl);
-  // Управление реле #1
-  digitalWrite(RELAY_PIN_1, relay_ctl);
-  }
+  Serial.println(relay1_status);
+  Serial.println();
+  if (relay1_status)
+    pca9536.setState(IO2, IO_HIGH);
+  else
+    pca9536.setState(IO2, IO_LOW);
+}
 
-  // Управление реле #2 с Blynk
-  BLYNK_WRITE(V101)
-  {
+// Управление реле #2
+BLYNK_WRITE(V101)
+{
   // Получение управляющего сигнала с сервера
-  int relay_ctl = param.asInt();
+  relay2_status = param.asInt();
   Serial.print("Relay power 2: ");
-  Serial.println(relay_ctl);
-  // Управление реле #2
-  digitalWrite(RELAY_PIN_2, relay_ctl);
-  }
-*/
+  Serial.println(relay2_status);
+  Serial.println();
+  if (relay1_status)
+    pca9536.setState(IO3, IO_HIGH);
+  else
+    pca9536.setState(IO3, IO_LOW);
+}
+
+// Отключение сирены
+BLYNK_WRITE(V102)
+{
+  int signal_ctl = param.asInt();
+  Serial.print("Signal status: ");
+  Serial.println(signal_ctl);
+  Serial.println();
+  acc_status = 0x00;
+  if (signal_ctl)
+    pca9536.setState(IO1, IO_HIGH);
+  else
+    pca9536.setState(IO1, IO_LOW);
+}
 
 // Вывод сообщения о причине сброса контроллера
 void print_reset_reason(RESET_REASON reason)
@@ -487,4 +499,43 @@ void verbose_print_reset_reason(RESET_REASON reason)
 // Автоматические функции и различные проверки
 void doAutoFunctions()
 {
+  // Включение сирены по срабатыванию акселерометра
+  if (acc_status)
+    pca9536.setState(IO1, IO_HIGH);
+}
+
+// Функции и таймеры для управления реле
+void doRelayFunctions()
+{
+  // Уменьшение счетчиков работы реле
+  if ((relay1_counter > 0) && (relay1_status))
+  {
+    relay1_counter--;
+    Serial.print("Relay counter 1: ");
+    Serial.println(relay1_counter);
+  }
+  if ((relay2_counter > 0) && (relay1_status))
+  {
+    relay2_counter--;
+    Serial.print("Relay counter 2: ");
+    Serial.println(relay2_counter);
+  }
+  Serial.println();
+}
+
+// Автоматические функции и различные проверки
+void resetProcedure()
+{
+  reset_counter++;
+  Serial.print("Reset counter: ");
+  Serial.println(reset_counter);
+  Serial.println();
+  if (reset_counter > max_reset_counter)
+  {
+    reset_counter = 0;
+    Serial.println("Reseting system!");
+    Serial.println();
+    pca9536.setState(IO0, IO_HIGH);
+    delay(250);
+  }
 }
