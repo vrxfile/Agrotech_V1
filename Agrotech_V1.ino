@@ -118,12 +118,13 @@ static volatile int acc_counter = 0x00;
 static volatile int relay1_counter = 0x00;
 static volatile int relay2_counter = 0x00;
 static volatile int reset_counter = 0x00;
+static volatile int red_green_led = 0x00;
 
 // Различные константы
-const float acc_dd = 2.0;             // Пороги срабатывания по акселеромеру
-const float door_dist = 5.0;          // Расстояние, при котором дверца закрыта
+const float acc_dd = 4.0;             // Пороги срабатывания по акселеромеру
+const float door_dist = 4.0;          // Расстояние, при котором дверца закрыта
 const int acc_max_counter = 15;       // Количество ударов до срабатывания сигнализации
-const int max_reset_counter = 1440;   // Количество минут до перезагрузки всей системы
+const int max_reset_counter = 5;   // Количество минут до перезагрузки всей системы
 
 void setup()
 {
@@ -146,7 +147,7 @@ void setup()
 
   // Инициализация I2C
   Wire.begin();
-  Wire.setClock(10000L);
+  Wire.setClock(20000L);
 
   // Инициализация модуля 4-х реле
   pca9536.reset();
@@ -166,7 +167,7 @@ void setup()
   // Инициализация LCD дисплея
   lcd.begin();
   lcd.clear (0, 0, 127, 63, 0x00);
-  lcd.gotoxy (5, 5); lcd.string ("Waiting for WiFi...", false);
+  lcd.gotoxy (5, 10); lcd.string ("Waiting for WiFi...", false);
 
   // Ожидание запуска Wi-Fi роутера (45...60 секунд)
   // delay(30000);
@@ -175,7 +176,7 @@ void setup()
   // Инициализация Wi-Fi и поключение к серверу Blynk
   lcd.clear (0, 0, 127, 63, 0x00);
   lcd.gotoxy (5, 10); lcd.string ("Connecting WiFi...", false);
-  lcd.gotoxy (5, 35); lcd.string ("Starting Blynk...", false);
+  lcd.gotoxy (5, 25); lcd.string ("Starting Blynk...", false);
   Serial.print("Connecting to ");
   Serial.println(ssid);
   Blynk.begin(auth, ssid, pass, blynk_ip, 8442);
@@ -202,7 +203,7 @@ void setup()
     Serial.println("");
     Serial.print("Error connection to Wi-Fi and Blynk");
     Serial.println("");
-    lcd.gotoxy (5, 25);
+    lcd.gotoxy (5, 10);
     lcd.string ("Connection failed!", false);
   }
 
@@ -240,22 +241,24 @@ void setup()
   }
 
   // Инициализация датчика VL53L0x
-  lox.init();
-  lox.setTimeout(500);
-#if defined LONG_RANGE
-  // lower the return signal rate limit (default is 0.25 MCPS)
-  lox.setSignalRateLimit(0.1);
-  // increase laser pulse periods (defaults are 14 and 10 PCLKs)
-  lox.setVcselPulsePeriod(VL53L0X::VcselPeriodPreRange, 18);
-  lox.setVcselPulsePeriod(VL53L0X::VcselPeriodFinalRange, 14);
-#endif
-#if defined HIGH_SPEED
-  // reduce timing budget to 20 ms (default is about 33 ms)
-  lox.setMeasurementTimingBudget(20000);
-#elif defined HIGH_ACCURACY
-  // increase timing budget to 200 ms
-  lox.setMeasurementTimingBudget(200000);
-#endif
+  /*
+    lox.init();
+    lox.setTimeout(500);
+    #if defined LONG_RANGE
+    // lower the return signal rate limit (default is 0.25 MCPS)
+    lox.setSignalRateLimit(0.1);
+    // increase laser pulse periods (defaults are 14 and 10 PCLKs)
+    lox.setVcselPulsePeriod(VL53L0X::VcselPeriodPreRange, 18);
+    lox.setVcselPulsePeriod(VL53L0X::VcselPeriodFinalRange, 14);
+    #endif
+    #if defined HIGH_SPEED
+    // reduce timing budget to 20 ms (default is about 33 ms)
+    lox.setMeasurementTimingBudget(20000);
+    #elif defined HIGH_ACCURACY
+    // increase timing budget to 200 ms
+    lox.setMeasurementTimingBudget(200000);
+    #endif
+  */
 
   // Инициализация датчика приближения
   if (!apds9960.begin()) {
@@ -307,9 +310,9 @@ void readDoorSensor()
   {
     apds9960.getColorData(&red_data, &green_data, &blue_data, &clear_data);
     prox = apds9960.readProximity();
-    Serial.print("Door proximity = ");
-    Serial.println(prox);
-    Serial.println();
+    // Serial.print("Door proximity = ");
+    // Serial.println(prox);
+    // Serial.println();
     if (prox < door_dist)
     {
       door_status = 0x01;
@@ -398,8 +401,17 @@ void readSendData()
   Blynk.virtualWrite(V2, soil_temp1); delay(25);        // Отправка данных на сервер Blynk
   Blynk.virtualWrite(V3, soil_temp2); delay(25);        // Отправка данных на сервер Blynk
 
+  // Отправка данных о состоянии дверцы и сигнализации
+  Serial.print("Door status: ");
+  Serial.println(door_status);
+  Serial.print("Acceleromter events: ");
+  Serial.println(acc_counter);
+  Blynk.virtualWrite(V10, door_status); delay(25);        // Отправка данных на сервер Blynk
+  Blynk.virtualWrite(V11, acc_counter); delay(25);        // Отправка данных на сервер Blynk
+
   // Считывание лазерного датчика уровня воды
-  dist = lox.readRangeSingleMillimeters();
+  // dist = lox.readRangeSingleMillimeters();
+  dist = 0.0;
   Serial.print("Distance = ");
   Serial.println(dist);
   Blynk.virtualWrite(V12, dist); delay(25);        // Отправка данных на сервер Blynk
@@ -428,7 +440,7 @@ BLYNK_WRITE(V101)
   Serial.print("Relay power 2: ");
   Serial.println(relay2_status);
   Serial.println();
-  if (relay1_status)
+  if (relay2_status)
     pca9536.setState(IO3, IO_HIGH);
   else
     pca9536.setState(IO3, IO_LOW);
@@ -446,6 +458,24 @@ BLYNK_WRITE(V102)
     pca9536.setState(IO1, IO_HIGH);
   else
     pca9536.setState(IO1, IO_LOW);
+}
+
+// Данные ползунка таймера реле #1
+BLYNK_WRITE(V103)
+{
+  relay1_counter = param.asInt();
+  Serial.print("Relay timer 1: ");
+  Serial.println(relay1_counter);
+  Serial.println();
+}
+
+// Данные ползунка таймера реле #2
+BLYNK_WRITE(V104)
+{
+  relay2_counter = param.asInt();
+  Serial.print("Relay timer 2: ");
+  Serial.println(relay2_counter);
+  Serial.println();
 }
 
 // Вывод сообщения о причине сброса контроллера
@@ -499,9 +529,34 @@ void verbose_print_reset_reason(RESET_REASON reason)
 // Автоматические функции и различные проверки
 void doAutoFunctions()
 {
+  byte pwm = 0x00;
   // Включение сирены по срабатыванию акселерометра
   if (acc_status)
     pca9536.setState(IO1, IO_HIGH);
+
+  // Включение мигания светодиода при открытии дверцы
+  if (door_status)
+  {
+    red_green_led = 1 - red_green_led;
+    pwm = 0x00;
+    leds.setAllBrightness(pwm);
+    pwm = 0x1F;
+    if (red_green_led)
+      leds.setBrightness(RLED, pwm);
+    else
+      leds.setBrightness(GLED, pwm);
+  }
+  else
+  {
+    if (red_green_led)
+    {
+      red_green_led = 0x00;
+      pwm = 0x00;
+      leds.setAllBrightness(pwm);
+      pwm = 0x1F;
+      leds.setBrightness(GLED, pwm);
+    }
+  }
 }
 
 // Функции и таймеры для управления реле
@@ -513,12 +568,30 @@ void doRelayFunctions()
     relay1_counter--;
     Serial.print("Relay counter 1: ");
     Serial.println(relay1_counter);
+    Blynk.virtualWrite(V103, relay1_counter);
+    delay(25);
   }
-  if ((relay2_counter > 0) && (relay1_status))
+  if ((relay1_counter == 0) && (relay1_status))
+  {
+    relay1_status = 0x00;
+    pca9536.setState(IO2, IO_LOW);
+    Blynk.virtualWrite(V100, relay1_status);
+    delay(25);
+  }
+  if ((relay2_counter > 0) && (relay2_status))
   {
     relay2_counter--;
     Serial.print("Relay counter 2: ");
     Serial.println(relay2_counter);
+    Blynk.virtualWrite(V104, relay2_counter);
+    delay(25);
+  }
+  if ((relay2_counter == 0) && (relay2_status))
+  {
+    relay2_status = 0x00;
+    pca9536.setState(IO3, IO_LOW);
+    Blynk.virtualWrite(V101, relay2_status);
+    delay(25);
   }
   Serial.println();
 }
