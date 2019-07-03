@@ -3,6 +3,7 @@
 #include <rom/rtc.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
+#include <Preferences.h>
 #include <BlynkSimpleEsp32.h>
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
@@ -68,7 +69,6 @@ const float moisture_100 = 100.0;
 #define DOOR_TIMER     1000  // Период для таймера открытия дверцы
 #define AUTO_TIMER     1000  // Период для таймера автоматических функций
 #define MAIN_TIMER     10000 // Период для таймера обновления данных
-#define INTERNET_TIMER 60000 // Период для таймера тестирования Интернета
 #define RESET_TIMER    60000 // Период для таймера общей перезагрузки
 #define RELAY_TIMER    60000 // Период для таймеров управления реле
 
@@ -84,7 +84,9 @@ BlynkTimer timer_auto;
 BlynkTimer timer_reset;
 BlynkTimer timer_alarm;
 BlynkTimer timer_relay;
-BlynkTimer timer_internet;
+
+// Настройки контроллера для счетчика включений
+Preferences preferences;
 
 // Данные с датчиков
 static volatile float air_temp = 0.0;
@@ -115,16 +117,18 @@ static volatile int i2c_status = 0x00;
 
 // Счетчики событий различных систем
 static volatile int acc_counter = 0x00;
+static volatile int door_counter = 0x00;
 static volatile int relay1_counter = 0x00;
 static volatile int relay2_counter = 0x00;
-static volatile int reset_counter = 0x00;
+static volatile int working_counter = 0x00;
 static volatile int red_green_led = 0x00;
+static volatile int pwr_counter = 0x00;
 
 // Различные константы
-const float acc_dd = 4.0;             // Пороги срабатывания по акселеромеру
+const float acc_dd = 7.0;             // Пороги срабатывания по акселеромеру
 const float door_dist = 4.0;          // Расстояние, при котором дверца закрыта
-const int acc_max_counter = 15;       // Количество ударов до срабатывания сигнализации
-const int max_reset_counter = 5;   // Количество минут до перезагрузки всей системы
+const int acc_max_counter = 30;       // Количество ударов до срабатывания сигнализации
+const int max_reset_counter = 720;    // Количество минут до перезагрузки всей системы
 
 void setup()
 {
@@ -143,6 +147,18 @@ void setup()
   Serial.println("CPU1 reset reason:");
   print_reset_reason(rtc_get_reset_reason(1));
   verbose_print_reset_reason(rtc_get_reset_reason(1));
+  Serial.println();
+
+  // Счетчик включений контроллера
+  preferences.begin("my-app", false);
+  //preferences.clear();
+  //preferences.remove("counter");
+  pwr_counter = preferences.getUInt("counter", 0);
+  pwr_counter++;
+  preferences.putUInt("counter", pwr_counter);
+  preferences.end();
+  Serial.print("Power counter value: ");
+  Serial.println(pwr_counter);
   Serial.println();
 
   // Инициализация I2C
@@ -267,6 +283,28 @@ void setup()
   apds9960.enableColor(true);
   apds9960.enableProximity(true);
 
+  // Очистка всех индикаторов в Blynk
+  Blynk.virtualWrite(V0, 0x00); delay(50);
+  Blynk.virtualWrite(V1, 0x00); delay(50);
+  Blynk.virtualWrite(V2, 0x00); delay(50);
+  Blynk.virtualWrite(V3, 0x00); delay(50);
+  Blynk.virtualWrite(V4, 0x00); delay(50);
+  Blynk.virtualWrite(V5, 0x00); delay(50);
+  Blynk.virtualWrite(V6, 0x00); delay(50);
+  Blynk.virtualWrite(V7, 0x00); delay(50);
+  Blynk.virtualWrite(V8, 0x00); delay(50);
+  Blynk.virtualWrite(V9, 0x00); delay(50);
+  Blynk.virtualWrite(V10, 0x00); delay(50);
+  Blynk.virtualWrite(V11, 0x00); delay(50);
+  Blynk.virtualWrite(V12, 0x00); delay(50);
+  Blynk.virtualWrite(V13, 0x00); delay(50);
+  Blynk.virtualWrite(V14, 0x00); delay(50);
+  Blynk.virtualWrite(V100, 0x00); delay(50);
+  Blynk.virtualWrite(V101, 0x00); delay(50);
+  Blynk.virtualWrite(V102, 0x00); delay(50);
+  Blynk.virtualWrite(V103, 0x00); delay(50);
+  Blynk.virtualWrite(V104, 0x00); delay(50);
+
   // Включение зеленого светодиода
   pwm = 0x00;
   leds.setAllBrightness(pwm);
@@ -313,11 +351,17 @@ void readDoorSensor()
     // Serial.print("Door proximity = ");
     // Serial.println(prox);
     // Serial.println();
-    if (prox < door_dist)
+    if (prox <= door_dist)
     {
+      if (door_status == 0x00)
+        door_counter++;
       door_status = 0x01;
       Serial.println("Proximity sensor event");
       Serial.println();
+    }
+    else
+    {
+      door_status = 0x00;
     }
   }
 }
@@ -340,9 +384,9 @@ void readIMUSensor()
     Serial.print("Acceleromter event: ");
     Serial.println(acc_counter);
     Serial.println();
-    if (acc_counter > acc_max_counter)
+    if (acc_counter >= acc_max_counter)
     {
-      acc_counter = 0;
+      acc_counter = 0x00;
       acc_status = 0x01;
     }
   }
@@ -402,12 +446,19 @@ void readSendData()
   Blynk.virtualWrite(V3, soil_temp2); delay(25);        // Отправка данных на сервер Blynk
 
   // Отправка данных о состоянии дверцы и сигнализации
-  Serial.print("Door status: ");
-  Serial.println(door_status);
+  Serial.print("Door open events: ");
+  Serial.println(door_counter);
   Serial.print("Acceleromter events: ");
   Serial.println(acc_counter);
-  Blynk.virtualWrite(V10, door_status); delay(25);        // Отправка данных на сервер Blynk
+  Serial.print("Working counter: ");
+  Serial.println(working_counter);
+  Serial.print("Power counter value: ");
+  Serial.println(pwr_counter);
+  Serial.println();
+  Blynk.virtualWrite(V10, door_counter); delay(25);       // Отправка данных на сервер Blynk
   Blynk.virtualWrite(V11, acc_counter); delay(25);        // Отправка данных на сервер Blynk
+  Blynk.virtualWrite(V13, working_counter); delay(25);    // Отправка данных на сервер Blynk
+  Blynk.virtualWrite(V14, pwr_counter); delay(25);        // Отправка данных на сервер Blynk
 
   // Считывание лазерного датчика уровня воды
   // dist = lox.readRangeSingleMillimeters();
@@ -446,7 +497,7 @@ BLYNK_WRITE(V101)
     pca9536.setState(IO3, IO_LOW);
 }
 
-// Отключение сирены
+// Отключение сирены и статуса открытой двери
 BLYNK_WRITE(V102)
 {
   int signal_ctl = param.asInt();
@@ -454,6 +505,9 @@ BLYNK_WRITE(V102)
   Serial.println(signal_ctl);
   Serial.println();
   acc_status = 0x00;
+  acc_counter = 0x00;
+  door_status = 0x00;
+  door_counter = 0x00;
   if (signal_ctl)
     pca9536.setState(IO1, IO_HIGH);
   else
@@ -530,12 +584,13 @@ void verbose_print_reset_reason(RESET_REASON reason)
 void doAutoFunctions()
 {
   byte pwm = 0x00;
+
   // Включение сирены по срабатыванию акселерометра
   if (acc_status)
     pca9536.setState(IO1, IO_HIGH);
 
   // Включение мигания светодиода при открытии дверцы
-  if (door_status)
+  if (door_counter)
   {
     red_green_led = 1 - red_green_led;
     pwm = 0x00;
@@ -562,7 +617,7 @@ void doAutoFunctions()
 // Функции и таймеры для управления реле
 void doRelayFunctions()
 {
-  // Уменьшение счетчиков работы реле
+  // Уменьшение счетчика работы реле 1
   if ((relay1_counter > 0) && (relay1_status))
   {
     relay1_counter--;
@@ -571,13 +626,16 @@ void doRelayFunctions()
     Blynk.virtualWrite(V103, relay1_counter);
     delay(25);
   }
-  if ((relay1_counter == 0) && (relay1_status))
+  // Отключение реле 1 по окончании работы счетчика
+  if ((relay1_counter <= 0) && (relay1_status))
   {
     relay1_status = 0x00;
     pca9536.setState(IO2, IO_LOW);
     Blynk.virtualWrite(V100, relay1_status);
     delay(25);
   }
+
+  // Уменьшение счетчика работы реле 2
   if ((relay2_counter > 0) && (relay2_status))
   {
     relay2_counter--;
@@ -586,29 +644,31 @@ void doRelayFunctions()
     Blynk.virtualWrite(V104, relay2_counter);
     delay(25);
   }
-  if ((relay2_counter == 0) && (relay2_status))
+  // Отключение реле 2 по окончании работы счетчика
+  if ((relay2_counter <= 0) && (relay2_status))
   {
     relay2_status = 0x00;
     pca9536.setState(IO3, IO_LOW);
     Blynk.virtualWrite(V101, relay2_status);
     delay(25);
   }
+
   Serial.println();
 }
 
 // Автоматические функции и различные проверки
 void resetProcedure()
 {
-  reset_counter++;
-  Serial.print("Reset counter: ");
-  Serial.println(reset_counter);
+  working_counter++;
+  Serial.print("Working counter: ");
+  Serial.println(working_counter);
   Serial.println();
-  if (reset_counter > max_reset_counter)
+  if (working_counter >= max_reset_counter)
   {
-    reset_counter = 0;
+    working_counter = 0;
     Serial.println("Reseting system!");
     Serial.println();
-    pca9536.setState(IO0, IO_HIGH);
     delay(250);
+    ESP.restart();
   }
 }
