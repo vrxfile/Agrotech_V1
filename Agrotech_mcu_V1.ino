@@ -17,8 +17,8 @@
 #include <TLC59108.h>
 
 // Точка доступа Wi-Fi
-char ssid[] = "MGBot";
-// char ssid[] = "AgroMGBOT";
+// char ssid[] = "MGBot";
+char ssid[] = "AgroMGBOT";
 char pass[] = "Terminator812";
 
 // Параметры IoT сервера
@@ -65,19 +65,23 @@ const float moisture_0 = 0.0;
 const float moisture_100 = 100.0;
 
 // Периоды таймеров
-#define ALARM_TIMER    100   // Период для таймера сигнализации удара
+#define LCD_TIMER      10000 // Период для таймера LCD экрана
 #define DOOR_TIMER     1000  // Период для таймера открытия дверцы
 #define AUTO_TIMER     1000  // Период для таймера автоматических функций
 #define MAIN_TIMER     10000 // Период для таймера обновления данных
+#define ALARM_TIMER    100   // Период для таймера сигнализации удара
 #define RESET_TIMER    60000 // Период для таймера общей перезагрузки
 #define RELAY_TIMER    60000 // Период для таймеров управления реле
 
 // Номера светодиодов RGB модуля
-#define RLED 3
-#define GLED 2
-#define BLED 5
+#define RLED   3
+#define GLED   2
+#define BLED   5
+#define UVLED1 1
+#define UVLED2 4
 
 // Таймеры
+BlynkTimer timer_lcd;
 BlynkTimer timer_main;
 BlynkTimer timer_door;
 BlynkTimer timer_auto;
@@ -128,7 +132,8 @@ static volatile int pwr_counter = 0x00;
 const float acc_dd = 7.0;             // Пороги срабатывания по акселеромеру
 const float door_dist = 4.0;          // Расстояние, при котором дверца закрыта
 const int acc_max_counter = 30;       // Количество ударов до срабатывания сигнализации
-const int max_reset_counter = 720;    // Количество минут до перезагрузки всей системы
+const int max_reset_counter = 360;    // Количество минут до перезагрузки всей системы
+const float min_soil_hum = 30;        // Минимальная влажность почвы
 
 void setup()
 {
@@ -186,8 +191,14 @@ void setup()
   lcd.gotoxy (5, 10); lcd.string ("Waiting for WiFi...", false);
 
   // Ожидание запуска Wi-Fi роутера (45...60 секунд)
-  // delay(30000);
-  // delay(30000);
+  Serial.print("Waiting for WiFi...");
+  for (int i = 0; i < 10; i++)
+  {
+    delay(5000);
+    Serial.print(i);
+  }
+  Serial.println();
+  Serial.println();
 
   // Инициализация Wi-Fi и поключение к серверу Blynk
   lcd.clear (0, 0, 127, 63, 0x00);
@@ -315,6 +326,9 @@ void setup()
     leds.setBrightness(RLED, pwm);
   delay(250);
 
+  // Очистка LCD экрана
+  lcd.clear (0, 0, 127, 63, 0x00);
+
   // Инициализация таймеров
   timer_main.setInterval(MAIN_TIMER, readSendData);
   timer_door.setInterval(DOOR_TIMER, readDoorSensor);
@@ -322,18 +336,19 @@ void setup()
   timer_alarm.setInterval(ALARM_TIMER, readIMUSensor);
   timer_relay.setInterval(RELAY_TIMER, doRelayFunctions);
   timer_reset.setInterval(RESET_TIMER, resetProcedure);
+  timer_lcd.setInterval(LCD_TIMER, printLCDData);
 }
 
 void loop()
 {
   Blynk.run();
+  timer_lcd.run();
   timer_main.run();
   timer_door.run();
   timer_auto.run();
   timer_reset.run();
   timer_alarm.run();
   timer_relay.run();
-  // timer_internet.run();
 }
 
 // Датчик открытия дверцы
@@ -454,7 +469,6 @@ void readSendData()
   Serial.println(working_counter);
   Serial.print("Power counter value: ");
   Serial.println(pwr_counter);
-  Serial.println();
   Blynk.virtualWrite(V10, door_counter); delay(25);       // Отправка данных на сервер Blynk
   Blynk.virtualWrite(V11, acc_counter); delay(25);        // Отправка данных на сервер Blynk
   Blynk.virtualWrite(V13, working_counter); delay(25);    // Отправка данных на сервер Blynk
@@ -469,6 +483,38 @@ void readSendData()
 
   Serial.println();
 }
+
+// Вывод некоторых данных на LCD экран
+void printLCDData()
+{
+  char strtemp1[32] = "";
+  char strtemp2[32] = "";
+  dtostrf(air_temp, 4, 1, strtemp1);
+  sprintf(strtemp2, "Air temp  = %s *C ", strtemp1);
+  lcd.gotoxy(0, 0);
+  lcd.string(strtemp2, false);
+  dtostrf(air_hum, 4, 1, strtemp1);
+  sprintf(strtemp2, "Air hum   = %s %% ", strtemp1);
+  lcd.gotoxy(0, 10);
+  lcd.string(strtemp2, false);
+  dtostrf(air_press, 5, 1, strtemp1);
+  sprintf(strtemp2, "Air press = %s mm ", strtemp1);
+  lcd.gotoxy(0, 20);
+  lcd.string(strtemp2, false);
+  dtostrf(light, 5, 1, strtemp1);
+  sprintf(strtemp2, "Light     = %s lx ", strtemp1);
+  lcd.gotoxy(0, 30);
+  lcd.string(strtemp2, false);
+  dtostrf(soil_hum1, 4, 1, strtemp1);
+  sprintf(strtemp2, "Soil hum1 = %s %% ", strtemp1);
+  lcd.gotoxy(0, 40);
+  lcd.string(strtemp2, false);
+  dtostrf(soil_hum2, 4, 1, strtemp1);
+  sprintf(strtemp2, "Soil hum2 = %s %% ", strtemp1);
+  lcd.gotoxy(0, 50);
+  lcd.string(strtemp2, false);
+}
+
 // Управление реле #1
 BLYNK_WRITE(V100)
 {
@@ -612,6 +658,20 @@ void doAutoFunctions()
       leds.setBrightness(GLED, pwm);
     }
   }
+
+  // Если влажность почвы ниже определенного порога - включение фиолетовых светодиодов
+  if ((soil_hum1 < min_soil_hum) || (soil_hum2 < min_soil_hum))
+  {
+    pwm = 0x1F;
+    leds.setBrightness(UVLED1, pwm);
+    leds.setBrightness(UVLED2, pwm);
+  }
+  else
+  {
+    pwm = 0x00;
+    leds.setBrightness(UVLED1, pwm);
+    leds.setBrightness(UVLED2, pwm);
+  }
 }
 
 // Функции и таймеры для управления реле
@@ -656,7 +716,7 @@ void doRelayFunctions()
   Serial.println();
 }
 
-// Автоматические функции и различные проверки
+// Процедура перезагрузки
 void resetProcedure()
 {
   working_counter++;
