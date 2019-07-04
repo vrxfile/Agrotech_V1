@@ -109,6 +109,7 @@ static volatile float acc_zz = 0.0;
 static volatile float acc_x0 = 0.0;
 static volatile float acc_y0 = 0.0;
 static volatile float acc_z0 = 0.0;
+static volatile float sys_temp = 0.0;
 
 // Статусы и флаги различных систем
 static volatile int acc_status = 0x00;
@@ -310,6 +311,7 @@ void setup()
   Blynk.virtualWrite(V12, 0x00); delay(50);
   Blynk.virtualWrite(V13, 0x00); delay(50);
   Blynk.virtualWrite(V14, 0x00); delay(50);
+  Blynk.virtualWrite(V15, 0x00); delay(50);
   Blynk.virtualWrite(V100, 0x00); delay(50);
   Blynk.virtualWrite(V101, 0x00); delay(50);
   Blynk.virtualWrite(V102, 0x00); delay(50);
@@ -386,12 +388,14 @@ void readIMUSensor()
 {
   sensors_event_t a, m, g, t;
   imu.getEvent(&a, &m, &g, &t);
+  sys_temp = t.temperature;
   acc_xx = fabs(a.acceleration.x - acc_x0);
   acc_yy = fabs(a.acceleration.y - acc_y0);
   acc_zz = fabs(a.acceleration.z - acc_z0);
   //  Serial.print("Accel X: "); Serial.print(acc_xx); Serial.print(" m/s^2");
   //  Serial.print("\tY: "); Serial.print(acc_yy); Serial.print(" m/s^2 ");
-  //  Serial.print("\tZ: "); Serial.print(acc_zz); Serial.println(" m/s^2 ");
+  //  Serial.print("\tZ: "); Serial.print(acc_zz); Serial.print(" m/s^2 ");
+  //  Serial.print("\tTemp: "); Serial.print(sys_temp); Serial.println(" *C ");
   //  Serial.println();
   if ((acc_xx > acc_dd) || (acc_yy > acc_dd) || (acc_zz > acc_dd))
   {
@@ -460,7 +464,7 @@ void readSendData()
   Blynk.virtualWrite(V2, soil_temp1); delay(25);        // Отправка данных на сервер Blynk
   Blynk.virtualWrite(V3, soil_temp2); delay(25);        // Отправка данных на сервер Blynk
 
-  // Отправка данных о состоянии дверцы и сигнализации
+  // Отправка данных о состоянии различных систем
   Serial.print("Door open events: ");
   Serial.println(door_counter);
   Serial.print("Acceleromter events: ");
@@ -469,10 +473,13 @@ void readSendData()
   Serial.println(working_counter);
   Serial.print("Power counter value: ");
   Serial.println(pwr_counter);
+  Serial.print("Inside temperature: ");
+  Serial.println(sys_temp);
   Blynk.virtualWrite(V10, door_counter); delay(25);       // Отправка данных на сервер Blynk
   Blynk.virtualWrite(V11, acc_counter); delay(25);        // Отправка данных на сервер Blynk
   Blynk.virtualWrite(V13, working_counter); delay(25);    // Отправка данных на сервер Blynk
   Blynk.virtualWrite(V14, pwr_counter); delay(25);        // Отправка данных на сервер Blynk
+  Blynk.virtualWrite(V15, sys_temp); delay(25);           // Отправка данных на сервер Blynk
 
   // Считывание лазерного датчика уровня воды
   // dist = lox.readRangeSingleMillimeters();
